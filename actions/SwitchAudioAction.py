@@ -28,6 +28,7 @@ class SwitchAudioAction(ActionBase):
 
         self.old_state: int = None
         self.tick_counter = 0
+        self.key_press_time = None  # For long press detection
 
         self.sink_model = Gtk.ListStore.new([str, str]) # Name, Display Name
         self.sink_display_model = Gtk.ListStore.new([str]) # Display Name
@@ -40,7 +41,7 @@ class SwitchAudioAction(ActionBase):
         for color in ["White", "Black"]:
             self.color_model.append([color.lower()])
             self.color_display_model.append([color])
-        
+
         # Populate icon model - Using PNGs now
         self.icons = {
             "Speaker": "speaker.png",
@@ -50,7 +51,7 @@ class SwitchAudioAction(ActionBase):
         for name in self.icons.keys():
             self.icon_model.append([self.icons[name]])
             self.icon_display_model.append([name])
-            
+
         # Ensure cache directory exists
         self.cache_dir = os.path.join(self.plugin_base.PATH, "cache")
         if not os.path.exists(self.cache_dir):
@@ -313,6 +314,24 @@ class SwitchAudioAction(ActionBase):
         return -1
 
     def on_key_down(self):
+        # Record press time for long press detection
+        self.key_press_time = time.time()
+
+    def on_key_up(self):
+        # Calculate press duration
+        if self.key_press_time is None:
+            press_duration = 0
+        else:
+            press_duration = time.time() - self.key_press_time
+            self.key_press_time = None
+
+        # Long press (>= 0.5s): just refresh display
+        if press_duration >= 0.5:
+            log.info("Long press detected - refreshing display")
+            self.show_state()
+            return
+
+        # Short press: cycle to next sink
         settings = self.get_settings()
         available_sinks = self.get_available_sinks()
 
@@ -347,8 +366,14 @@ class SwitchAudioAction(ActionBase):
     def on_dial_down(self):
         self.on_key_down()
 
+    def on_dial_up(self):
+        self.on_key_up()
+
     def on_touch_start(self):
         self.on_key_down()
+
+    def on_touch_stop(self):
+        self.on_key_up()
 
     # --- Backend Helpers (pactl) ---
 
