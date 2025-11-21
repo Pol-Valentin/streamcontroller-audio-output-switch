@@ -327,8 +327,7 @@ class SwitchAudioAction(ActionBase):
 
         # Long press (>= 0.5s): just refresh display
         if press_duration >= 0.5:
-            available_sinks = self.get_available_sinks()
-            log.info(f"Long press detected - refreshing display. Available sinks: {list(available_sinks)}")
+            log.info("Long press detected - refreshing display")
             self.show_state()
             return
 
@@ -400,6 +399,7 @@ class SwitchAudioAction(ActionBase):
                         sink_name = parts[1]
                         available_sinks.add(sink_name)
 
+            log.info(f"Available sinks: {list(available_sinks)}")
             return available_sinks
         except Exception as e:
             log.error(f"Error getting available sinks: {e}")
