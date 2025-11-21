@@ -1,8 +1,17 @@
-[
-    {
-        "name": "StreamController Plugin Tools",
-        "url": "https://github.com/StreamController/streamcontroller_plugin_tools",
+{
+    "generic": {
+        "copyright": "2025 Pol",
+        "original-url": "https://github.com/Pol/audio-output-switch",
         "license": "GPL-3.0",
-        "description": "Base library for StreamController plugins"
-    }
-]
+        "license-url": "https://www.gnu.org/licenses/gpl-3.0.html",
+        "description": "Audio output switcher plugin for StreamController"
+    },
+    "dependencies": [
+        {
+            "name": "StreamController Plugin Tools",
+            "url": "https://github.com/StreamController/streamcontroller_plugin_tools",
+            "license": "GPL-3.0",
+            "description": "Base library for StreamController plugins"
+        }
+    ]
+}
