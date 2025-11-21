@@ -1,0 +1,8 @@
+[
+    {
+        "name": "StreamController Plugin Tools",
+        "url": "https://github.com/StreamController/streamcontroller_plugin_tools",
+        "license": "GPL-3.0",
+        "description": "Base library for StreamController plugins"
+    }
+]

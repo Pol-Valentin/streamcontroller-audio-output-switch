@@ -1,0 +1,12 @@
+{
+  "plugin": {
+    "name": "Audio Output Switch",
+    "description": "Switch between audio outputs"
+  },
+  "actions": {
+    "switch_audio": {
+      "name": "Switch Audio Output",
+      "description": "Cycle through configured audio outputs"
+    }
+  }
+}
