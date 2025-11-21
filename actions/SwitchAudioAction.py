@@ -61,13 +61,30 @@ class SwitchAudioAction(ActionBase):
         self.show_state()
 
     def show_state(self) -> None:
-        active_index = self.get_active_sink_index()
-        display_index = active_index if active_index != -1 else 0
-
-        prev_index = (display_index - 1) % 3
-        next_index = (display_index + 1) % 3
-
         settings = self.get_settings()
+        available_sinks = self.get_available_sinks()
+
+        # Build list of configured and available sinks with their indices
+        available_configs = []
+        for i, key_suffix in enumerate(["a", "b", "c"]):
+            sink_name = settings.get(f"sink_{key_suffix}")
+            if sink_name and sink_name in available_sinks:
+                available_configs.append(i)
+
+        if not available_configs:
+            # No available sinks - show error or default state
+            volume = "--"
+            self.set_bottom_label(volume, font_size=12)
+            return
+
+        # Find current active sink in available configs
+        active_index = self.get_active_sink_index()
+        current_position = -1
+        if active_index in available_configs:
+            current_position = available_configs.index(active_index)
+        else:
+            current_position = 0
+
         icon_color = settings.get("icon_color", "white")
 
         def get_icon_path(idx):
@@ -81,9 +98,23 @@ class SwitchAudioAction(ActionBase):
 
             return os.path.join(self.plugin_base.PATH, "assets", filename)
 
-        current_icon_path = get_icon_path(display_index)
-        prev_icon_path = get_icon_path(prev_index)
-        next_icon_path = get_icon_path(next_index)
+        # Get icon paths based on available sinks
+        current_idx = available_configs[current_position]
+        current_icon_path = get_icon_path(current_idx)
+
+        # Only show prev/next if there are multiple available sinks
+        prev_icon_path = None
+        next_icon_path = None
+
+        if len(available_configs) >= 2:
+            next_position = (current_position + 1) % len(available_configs)
+            next_idx = available_configs[next_position]
+            next_icon_path = get_icon_path(next_idx)
+
+        if len(available_configs) >= 3:
+            prev_position = (current_position - 1) % len(available_configs)
+            prev_idx = available_configs[prev_position]
+            prev_icon_path = get_icon_path(prev_idx)
 
         volume = self.get_volume()
 
@@ -126,22 +157,25 @@ class SwitchAudioAction(ActionBase):
             center_pos = ((size[0] - center_size[0]) // 2, (size[1] - center_size[1]) // 2 + 5)
             canvas.alpha_composite(center_img, center_pos)
 
-            # Prev Icon (Top Left)
-            corner_size = (50, 50)
-            prev_img = load_and_resize(prev_path, corner_size, opacity=179) # 70% opacity
-            canvas.alpha_composite(prev_img, (5, 5))
+            # Prev Icon (Top Left) - only if provided
+            if prev_path is not None:
+                corner_size = (50, 50)
+                prev_img = load_and_resize(prev_path, corner_size, opacity=179) # 70% opacity
+                canvas.alpha_composite(prev_img, (5, 5))
 
-            # Next Icon (Top Right)
-            next_img = load_and_resize(next_path, corner_size, opacity=179) # 70% opacity
-            canvas.alpha_composite(next_img, (size[0] - corner_size[0] - 5, 5))
+            # Next Icon (Top Right) - only if provided
+            if next_path is not None:
+                corner_size = (50, 50)
+                next_img = load_and_resize(next_path, corner_size, opacity=179) # 70% opacity
+                canvas.alpha_composite(next_img, (size[0] - corner_size[0] - 5, 5))
 
             # Save to cache
             output_filename = f"icon_{id(self)}_{int(time.time())}.png"
             output_path = os.path.join(self.cache_dir, output_filename)
-            
+
             canvas.save(output_path)
             return output_path
-            
+
         except Exception as e:
             log.error(f"Error generating composite icon: {e}")
             return None
@@ -186,8 +220,15 @@ class SwitchAudioAction(ActionBase):
         self.sink_model.clear()
         self.sink_display_model.clear()
         sinks = self.get_sinks()
+        available_sinks = self.get_available_sinks()
+
         for sink in sinks:
             display_name = f"{sink['description']} ({sink['name']})"
+
+            # Mark unavailable sinks
+            if sink['name'] not in available_sinks:
+                display_name += " (déconnecté)"
+
             self.sink_model.append([sink['name'], display_name])
             self.sink_display_model.append([display_name])
 
@@ -273,33 +314,34 @@ class SwitchAudioAction(ActionBase):
 
     def on_key_down(self):
         settings = self.get_settings()
-        current_index = self.get_active_sink_index()
-        
-        next_index = 0
-        if current_index == 0: next_index = 1
-        elif current_index == 1: next_index = 2
-        elif current_index == 2: next_index = 0
-        else: next_index = 0
-            
-        key_suffix = ["a", "b", "c"][next_index]
-        next_sink = settings.get(f"sink_{key_suffix}")
-        
-        if not next_sink:
-            next_index = (next_index + 1) % 3
-            key_suffix = ["a", "b", "c"][next_index]
-            next_sink = settings.get(f"sink_{key_suffix}")
-            
-        if not next_sink:
-            next_index = (next_index + 1) % 3
-            key_suffix = ["a", "b", "c"][next_index]
-            next_sink = settings.get(f"sink_{key_suffix}")
-            
-        if next_sink:
-            self.set_sink(next_sink)
-        else:
-            log.warning("No sinks configured for cycling")
-            self.show_error(1)
+        available_sinks = self.get_available_sinks()
 
+        # Build list of configured and available sinks with their indices
+        available_configs = []
+        for i, key_suffix in enumerate(["a", "b", "c"]):
+            sink_name = settings.get(f"sink_{key_suffix}")
+            if sink_name and sink_name in available_sinks:
+                available_configs.append((i, sink_name))
+
+        if not available_configs:
+            log.warning("No available sinks configured for cycling")
+            self.show_error(1)
+            self.show_state()
+            return
+
+        # Find current active sink in available configs
+        current_index = self.get_active_sink_index()
+        current_position = -1
+        for pos, (idx, _) in enumerate(available_configs):
+            if idx == current_index:
+                current_position = pos
+                break
+
+        # Cycle to next available sink
+        next_position = (current_position + 1) % len(available_configs)
+        next_sink = available_configs[next_position][1]
+
+        self.set_sink(next_sink)
         self.show_state()
 
     def on_dial_down(self):
@@ -309,6 +351,33 @@ class SwitchAudioAction(ActionBase):
         self.on_key_down()
 
     # --- Backend Helpers (pactl) ---
+
+    def get_available_sinks(self):
+        """
+        Get set of currently available audio sink names.
+
+        Returns:
+            set: Set of sink names that are currently connected and available
+        """
+        try:
+            env = os.environ.copy()
+            env["LC_ALL"] = "C"
+            output = subprocess.check_output(["pactl", "list", "sinks", "short"], text=True, env=env)
+
+            available_sinks = set()
+            for line in output.splitlines():
+                line = line.strip()
+                if line:
+                    # Format: <id>\t<name>\t<module>\t<sample_spec>\t<state>
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        sink_name = parts[1]
+                        available_sinks.add(sink_name)
+
+            return available_sinks
+        except Exception as e:
+            log.error(f"Error getting available sinks: {e}")
+            return set()
 
     def get_default_sink_name(self):
         try:
