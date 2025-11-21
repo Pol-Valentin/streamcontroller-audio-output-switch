@@ -327,7 +327,8 @@ class SwitchAudioAction(ActionBase):
 
         # Long press (>= 0.5s): just refresh display
         if press_duration >= 0.5:
-            log.info("Long press detected - refreshing display")
+            available_sinks = self.get_available_sinks()
+            log.info(f"Long press detected - refreshing display. Available sinks: {list(available_sinks)}")
             self.show_state()
             return
 
