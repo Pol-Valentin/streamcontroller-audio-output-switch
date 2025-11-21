@@ -5,7 +5,7 @@ PLUGIN_ID = com_pol_audio_switch
 PLUGIN_NAME = Audio Output Switch
 
 # StreamController paths
-SC_PLUGINS_DIR = ~/.var/app/com.core447.StreamController/data/plugins
+SC_PLUGINS_DIR = $$HOME/.var/app/com.core447.StreamController/data/plugins
 PLUGIN_DEST = $(SC_PLUGINS_DIR)/$(PLUGIN_ID)
 
 # Current directory
