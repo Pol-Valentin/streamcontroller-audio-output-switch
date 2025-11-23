@@ -8,6 +8,7 @@ import sys
 import os
 import subprocess
 import json
+import shutil
 from loguru import logger as log
 
 log.debug("Loading com_pol_audio_switch main.py")
@@ -75,3 +76,14 @@ class AudioSwitchPlugin(PluginBase):
             log.info(f"Set default sink to: {sink_id}")
         except subprocess.CalledProcessError as e:
             log.error(f"Error setting sink: {e}")
+
+    def on_uninstall(self):
+        """Clean up plugin resources on uninstall"""
+        try:
+            # Clean up cache directory
+            cache_dir = os.path.join(self.PATH, "cache")
+            if os.path.exists(cache_dir):
+                shutil.rmtree(cache_dir)
+                log.info("Cleaned up plugin cache directory")
+        except Exception as e:
+            log.error(f"Error cleaning up plugin resources: {e}")
