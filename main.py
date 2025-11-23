@@ -1,5 +1,4 @@
 # Import StreamController modules
-print("DEBUG: Loading com_pol_audio_switch main.py")
 from src.backend.PluginManager.PluginBase import PluginBase
 from src.backend.PluginManager.ActionHolder import ActionHolder
 from src.backend.DeckManagement.InputIdentifier import Input
@@ -10,6 +9,8 @@ import os
 import subprocess
 import json
 from loguru import logger as log
+
+log.debug("Loading com_pol_audio_switch main.py")
 
 # Add plugin to sys.paths
 sys.path.append(os.path.dirname(__file__))
