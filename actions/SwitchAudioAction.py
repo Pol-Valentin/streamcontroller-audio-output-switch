@@ -411,7 +411,8 @@ class SwitchAudioAction(ActionBase):
             env["LC_ALL"] = "C"
             output = subprocess.check_output(["pactl", "get-default-sink"], text=True, env=env)
             return output.strip()
-        except Exception:
+        except Exception as e:
+            log.error(f"Error getting default sink name: {e}")
             return None
 
     def get_volume(self):
@@ -425,7 +426,8 @@ class SwitchAudioAction(ActionBase):
                     vol_str = parts[1].strip().replace("%", "")
                     return vol_str
             return "??"
-        except Exception:
+        except Exception as e:
+            log.error(f"Error getting volume: {e}")
             return "??"
 
     def get_sinks(self):
