@@ -12,6 +12,8 @@ import subprocess
 import json
 import time
 import re
+import hashlib
+import threading
 
 # Import PIL for image composition
 from PIL import Image, ImageDraw
@@ -57,9 +59,24 @@ class SwitchAudioAction(ActionBase):
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
 
+        # Track cache files used by this instance for cleanup
+        self.used_cache_files = set()
+
+        # Event listener thread
+        self.event_listener_thread = None
+        self.event_listener_running = False
+        self.event_listener_process = None
+
     def on_ready(self):
         self.old_state = None
+        self.cleanup_old_cache_files()
+        self.start_event_listener()
         self.show_state()
+
+    def on_destroy(self):
+        """Clean up cache files used by this instance when action is removed"""
+        self.stop_event_listener()
+        self.cleanup_instance_cache_files()
 
     def show_state(self) -> None:
         settings = self.get_settings()
@@ -129,6 +146,19 @@ class SwitchAudioAction(ActionBase):
 
     def generate_composite_icon(self, current_path, prev_path, next_path):
         try:
+            # Generate hash based on icon paths for cache lookup
+            cache_key = self._generate_cache_key(current_path, prev_path, next_path)
+            cache_filename = f"icon_{cache_key}.png"
+            cache_path = os.path.join(self.cache_dir, cache_filename)
+
+            # Check if cached version exists
+            if os.path.exists(cache_path):
+                log.debug(f"Using cached icon: {cache_filename}")
+                self.used_cache_files.add(cache_filename)
+                return cache_path
+
+            # Generate new composite icon
+            log.info(f"Generating new composite icon: {cache_filename}")
             size = (144, 144)
             canvas = Image.new("RGBA", size, (0, 0, 0, 0))
 
@@ -171,15 +201,159 @@ class SwitchAudioAction(ActionBase):
                 canvas.alpha_composite(next_img, (size[0] - corner_size[0] - 5, 5))
 
             # Save to cache
-            output_filename = f"icon_{id(self)}_{int(time.time())}.png"
-            output_path = os.path.join(self.cache_dir, output_filename)
-
-            canvas.save(output_path)
-            return output_path
+            canvas.save(cache_path)
+            self.used_cache_files.add(cache_filename)
+            return cache_path
 
         except Exception as e:
             log.error(f"Error generating composite icon: {e}")
             return None
+
+    def _generate_cache_key(self, current_path, prev_path, next_path):
+        """Generate a deterministic hash based on icon paths"""
+        # Use just filenames to make hash more stable
+        current = os.path.basename(current_path) if current_path else "none"
+        prev = os.path.basename(prev_path) if prev_path else "none"
+        next_icon = os.path.basename(next_path) if next_path else "none"
+
+        key_string = f"{current}_{prev}_{next_icon}"
+        return hashlib.md5(key_string.encode()).hexdigest()[:16]
+
+    def cleanup_old_cache_files(self):
+        """Remove cache files older than 7 days that aren't in use"""
+        try:
+            if not os.path.exists(self.cache_dir):
+                return
+
+            current_time = time.time()
+            max_age = 7 * 24 * 60 * 60  # 7 days in seconds
+
+            for filename in os.listdir(self.cache_dir):
+                if not filename.startswith("icon_") or not filename.endswith(".png"):
+                    continue
+
+                filepath = os.path.join(self.cache_dir, filename)
+
+                # Skip if file is in use by this instance
+                if filename in self.used_cache_files:
+                    continue
+
+                # Remove if older than max_age
+                file_age = current_time - os.path.getmtime(filepath)
+                if file_age > max_age:
+                    try:
+                        os.remove(filepath)
+                        log.info(f"Removed old cache file: {filename}")
+                    except Exception as e:
+                        log.error(f"Failed to remove cache file {filename}: {e}")
+
+        except Exception as e:
+            log.error(f"Error cleaning up cache files: {e}")
+
+    def cleanup_instance_cache_files(self):
+        """Clean up cache files that were only used by this instance"""
+        try:
+            # Note: We don't delete files in used_cache_files because they might
+            # be shared with other instances. We rely on cleanup_old_cache_files
+            # to remove truly unused files based on age.
+            self.used_cache_files.clear()
+            log.debug("Cleared instance cache file tracking")
+        except Exception as e:
+            log.error(f"Error cleaning up instance cache: {e}")
+
+    def start_event_listener(self):
+        """Start listening to pactl subscribe events in a background thread"""
+        if self.event_listener_running:
+            log.warning("Event listener already running")
+            return
+
+        self.event_listener_running = True
+        self.event_listener_thread = threading.Thread(
+            target=self._event_listener_worker,
+            daemon=True,
+            name="pactl-subscribe-listener"
+        )
+        self.event_listener_thread.start()
+        log.info("Started audio event listener")
+
+    def stop_event_listener(self):
+        """Stop the event listener thread"""
+        if not self.event_listener_running:
+            return
+
+        log.info("Stopping audio event listener")
+        self.event_listener_running = False
+
+        # Terminate the pactl subprocess
+        if self.event_listener_process:
+            try:
+                self.event_listener_process.terminate()
+                self.event_listener_process.wait(timeout=2)
+            except Exception as e:
+                log.error(f"Error terminating event listener process: {e}")
+                try:
+                    self.event_listener_process.kill()
+                except:
+                    pass
+
+        # Wait for thread to finish
+        if self.event_listener_thread and self.event_listener_thread.is_alive():
+            self.event_listener_thread.join(timeout=3)
+
+        log.info("Audio event listener stopped")
+
+    def _event_listener_worker(self):
+        """Background worker that listens to pactl subscribe events"""
+        try:
+            env = os.environ.copy()
+            env["LC_ALL"] = "C"
+
+            log.debug("Starting pactl subscribe process")
+            self.event_listener_process = subprocess.Popen(
+                ["pactl", "subscribe"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                bufsize=1  # Line buffered
+            )
+
+            # Read events line by line
+            while self.event_listener_running:
+                try:
+                    line = self.event_listener_process.stdout.readline()
+                    if not line:
+                        # Process ended
+                        break
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    log.debug(f"Audio event: {line}")
+
+                    # Check if it's a sink-related event
+                    if "sink" in line.lower():
+                        log.info(f"Sink event detected, refreshing display: {line}")
+                        # Update display on main thread (GTK operations must be on main thread)
+                        # We use a small delay to avoid too many rapid updates
+                        time.sleep(0.1)
+                        self.show_state()
+
+                except Exception as e:
+                    if self.event_listener_running:
+                        log.error(f"Error reading event: {e}")
+                    break
+
+        except Exception as e:
+            log.error(f"Event listener worker error: {e}")
+        finally:
+            if self.event_listener_process:
+                try:
+                    self.event_listener_process.terminate()
+                except:
+                    pass
+            log.debug("Event listener worker terminated")
 
     def get_config_rows(self) -> list:
         rows = []
@@ -298,8 +472,11 @@ class SwitchAudioAction(ActionBase):
             self.show_state()
 
     def on_tick(self):
+        # Event listener handles updates, but keep a fallback refresh every 60 seconds
+        # in case the event listener fails
         self.tick_counter += 1
-        if self.tick_counter % 10 == 0:  # Update every 10 seconds
+        if self.tick_counter % 60 == 0:  # Fallback update every 60 seconds
+            log.debug("Fallback tick refresh")
             self.show_state()
 
     def get_active_sink_index(self) -> int:
