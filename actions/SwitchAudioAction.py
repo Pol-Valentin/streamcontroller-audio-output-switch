@@ -274,14 +274,12 @@ class SwitchAudioAction(ActionBase):
             name="pactl-subscribe-listener"
         )
         self.event_listener_thread.start()
-        log.info("Started audio event listener")
 
     def stop_event_listener(self):
         """Stop the event listener thread"""
         if not self.event_listener_running:
             return
 
-        log.info("Stopping audio event listener")
         self.event_listener_running = False
 
         # Terminate the pactl subprocess
@@ -300,7 +298,6 @@ class SwitchAudioAction(ActionBase):
         if self.event_listener_thread and self.event_listener_thread.is_alive():
             self.event_listener_thread.join(timeout=3)
 
-        log.info("Audio event listener stopped")
 
     def _event_listener_worker(self):
         """Background worker that listens to pactl subscribe events"""
@@ -308,7 +305,6 @@ class SwitchAudioAction(ActionBase):
             env = os.environ.copy()
             env["LC_ALL"] = "C"
 
-            log.debug("Starting pactl subscribe process")
             self.event_listener_process = subprocess.Popen(
                 ["pactl", "subscribe"],
                 stdout=subprocess.PIPE,
@@ -330,7 +326,6 @@ class SwitchAudioAction(ActionBase):
                     if not line:
                         continue
 
-                    log.debug(f"Audio event: {line}")
 
                     # Check if it's a sink-related event
                     if "sink" in line.lower():
