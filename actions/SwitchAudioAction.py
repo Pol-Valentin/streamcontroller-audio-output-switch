@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Pango
+from gi.repository import Gtk, Adw
 
 class SwitchAudioAction(ActionBase):
     def __init__(self, *args, **kwargs):
@@ -31,9 +31,9 @@ class SwitchAudioAction(ActionBase):
         self.old_state: int = None
         self.tick_counter = 0
         self.key_press_time = None  # For long press detection
+        self._loading_config = False
 
         self.sink_model = Gtk.ListStore.new([str, str]) # Name, Display Name
-        self.sink_display_model = Gtk.ListStore.new([str]) # Display Name
 
         self.icon_model = Gtk.ListStore.new([str]) # Icon Filename
         self.icon_display_model = Gtk.ListStore.new([str]) # Icon Name
@@ -85,8 +85,8 @@ class SwitchAudioAction(ActionBase):
         # Build list of configured and available sinks with their indices
         available_configs = []
         for i, key_suffix in enumerate(["a", "b", "c"]):
-            sink_name = settings.get(f"sink_{key_suffix}")
-            if sink_name and sink_name in available_sinks:
+            sink_names = self._get_sink_names(settings, key_suffix)
+            if self._get_first_available_sink(sink_names, available_sinks):
                 available_configs.append(i)
 
         if not available_configs:
@@ -363,24 +363,37 @@ class SwitchAudioAction(ActionBase):
         self.color_row = color_row
         rows.append(color_row)
 
+        self._sink_checkbuttons = {}
+
         for i, label in enumerate(["A", "B", "C"]):
-            sink_row = ComboRow(title=f"Output {label}", model=self.sink_display_model)
-            sink_renderer = Gtk.CellRendererText(ellipsize=Pango.EllipsizeMode.END, max_width_chars=30)
-            sink_row.combo_box.pack_start(sink_renderer, True)
-            sink_row.combo_box.add_attribute(sink_renderer, "text", 0)
+            # ExpanderRow with CheckButtons for multiselect sinks
+            expander = Adw.ExpanderRow(title=f"Output {label}")
+            self._sink_checkbuttons[i] = []
+
+            for idx in range(len(self.sink_model)):
+                sink_name = self.sink_model[idx][0]
+                display_name = self.sink_model[idx][1]
+
+                action_row = Adw.ActionRow(title=display_name)
+                action_row.set_title_lines(1)
+                check = Gtk.CheckButton()
+                check.sink_name = sink_name
+                check.connect("toggled", self.on_sink_toggle, i)
+                action_row.add_prefix(check)
+                action_row.set_activatable_widget(check)
+                expander.add_row(action_row)
+                self._sink_checkbuttons[i].append(check)
 
             icon_row = ComboRow(title=f"Icon {label}", model=self.icon_display_model)
             icon_renderer = Gtk.CellRendererText()
             icon_row.combo_box.pack_start(icon_renderer, True)
             icon_row.combo_box.add_attribute(icon_renderer, "text", 0)
-
-            sink_row.combo_box.connect("changed", self.on_sink_change, i)
             icon_row.combo_box.connect("changed", self.on_icon_change, i)
 
-            rows.append(sink_row)
+            rows.append(expander)
             rows.append(icon_row)
 
-            setattr(self, f"sink_row_{i}", sink_row)
+            setattr(self, f"sink_expander_{i}", expander)
             setattr(self, f"icon_row_{i}", icon_row)
 
         self.load_config_settings()
@@ -388,11 +401,12 @@ class SwitchAudioAction(ActionBase):
 
     def load_sink_model(self):
         self.sink_model.clear()
-        self.sink_display_model.clear()
         sinks = self.get_sinks()
         available_sinks = self.get_available_sinks()
 
+        system_sink_names = set()
         for sink in sinks:
+            system_sink_names.add(sink['name'])
             display_name = f"{sink['description']} ({sink['name']})"
 
             # Mark unavailable sinks
@@ -400,9 +414,19 @@ class SwitchAudioAction(ActionBase):
                 display_name += " (déconnecté)"
 
             self.sink_model.append([sink['name'], display_name])
-            self.sink_display_model.append([display_name])
+
+        # Add saved sinks that are no longer in the system
+        settings = self.get_settings()
+        for key_suffix in ["a", "b", "c"]:
+            sink_names = self._get_sink_names(settings, key_suffix)
+            for name in sink_names:
+                if name and name not in system_sink_names:
+                    system_sink_names.add(name)
+                    display_name = f"{name} (déconnecté)"
+                    self.sink_model.append([name, display_name])
 
     def load_config_settings(self):
+        self._loading_config = True
         settings = self.get_settings()
 
         # Load icon color
@@ -414,20 +438,23 @@ class SwitchAudioAction(ActionBase):
                 break
 
         for i, key_suffix in enumerate(["a", "b", "c"]):
-            sink_name = settings.get(f"sink_{key_suffix}")
+            sink_names = self._get_sink_names(settings, key_suffix)
             icon_name = settings.get(f"icon_{key_suffix}")
 
-            sink_row = getattr(self, f"sink_row_{i}")
+            # Check the checkbuttons for saved sinks
+            selected_count = 0
+            for check in self._sink_checkbuttons[i]:
+                is_selected = check.sink_name in sink_names
+                check.set_active(is_selected)
+                if is_selected:
+                    selected_count += 1
+
+            # Update expander subtitle with selection count
+            expander = getattr(self, f"sink_expander_{i}")
+            expander.set_subtitle(f"{selected_count} sink(s) sélectionné(s)" if selected_count else "Aucun sink sélectionné")
+
             icon_row = getattr(self, f"icon_row_{i}")
-
-            sink_row.combo_box.set_active(-1)
             icon_row.combo_box.set_active(-1)
-
-            if sink_name:
-                for idx, row in enumerate(self.sink_model):
-                    if row[0] == sink_name:
-                        sink_row.combo_box.set_active(idx)
-                        break
 
             if icon_name:
                 for idx, row in enumerate(self.icon_display_model):
@@ -435,16 +462,28 @@ class SwitchAudioAction(ActionBase):
                         icon_row.combo_box.set_active(idx)
                         break
 
-    def on_sink_change(self, combo_box, index):
+        self._loading_config = False
+
+    def on_sink_toggle(self, check_button, index):
+        if getattr(self, '_loading_config', False):
+            return
         key_suffix = ["a", "b", "c"][index]
-        sink_row = getattr(self, f"sink_row_{index}")
-        idx = sink_row.combo_box.get_active()
-        if idx >= 0 and idx < len(self.sink_model):
-            sink_name = self.sink_model[idx][0]
-            settings = self.get_settings()
-            settings[f"sink_{key_suffix}"] = sink_name
-            self.set_settings(settings)
-            self.show_state()
+        # Build the list of selected sinks from all checkbuttons for this slot
+        selected_sinks = []
+        for check in self._sink_checkbuttons[index]:
+            if check.get_active():
+                selected_sinks.append(check.sink_name)
+
+        settings = self.get_settings()
+        settings[f"sink_{key_suffix}"] = selected_sinks
+        self.set_settings(settings)
+
+        # Update expander subtitle
+        expander = getattr(self, f"sink_expander_{index}")
+        count = len(selected_sinks)
+        expander.set_subtitle(f"{count} sink(s) sélectionné(s)" if count else "Aucun sink sélectionné")
+
+        self.show_state()
 
     def on_icon_change(self, combo_box, index):
         key_suffix = ["a", "b", "c"][index]
@@ -479,9 +518,10 @@ class SwitchAudioAction(ActionBase):
         current_default = self.get_default_sink_name()
         if not current_default:
             return -1
+        current_default = current_default.strip()
         for i, key_suffix in enumerate(["a", "b", "c"]):
-            sink_name = settings.get(f"sink_{key_suffix}")
-            if sink_name and sink_name.strip() == current_default.strip():
+            sink_names = self._get_sink_names(settings, key_suffix)
+            if any(name.strip() == current_default for name in sink_names):
                 return i
         return -1
 
@@ -510,9 +550,10 @@ class SwitchAudioAction(ActionBase):
         # Build list of configured and available sinks with their indices
         available_configs = []
         for i, key_suffix in enumerate(["a", "b", "c"]):
-            sink_name = settings.get(f"sink_{key_suffix}")
-            if sink_name and sink_name in available_sinks:
-                available_configs.append((i, sink_name))
+            sink_names = self._get_sink_names(settings, key_suffix)
+            first_available = self._get_first_available_sink(sink_names, available_sinks)
+            if first_available:
+                available_configs.append((i, first_available))
 
         if not available_configs:
             log.warning("No available sinks configured for cycling")
@@ -546,6 +587,22 @@ class SwitchAudioAction(ActionBase):
 
     def on_touch_stop(self):
         self.on_key_up()
+
+    # --- Settings Helpers ---
+
+    def _get_sink_names(self, settings, key_suffix):
+        """Normalize sink setting to a list (retro-compatible with old string format)"""
+        val = settings.get(f"sink_{key_suffix}", [])
+        if isinstance(val, str):
+            return [val] if val else []
+        return val if val else []
+
+    def _get_first_available_sink(self, sink_names, available_sinks):
+        """Return the first sink name from the list that is currently available, or None"""
+        for name in sink_names:
+            if name in available_sinks:
+                return name
+        return None
 
     # --- Backend Helpers (pactl) ---
 
